@@ -1,0 +1,107 @@
+---
+output: 
+  pdf_document: 
+    fig_height: 3.7
+---
+Setup
+```{r, message=FALSE}
+setwd("/Users/adazhong/Library/Mobile Documents/com~apple~CloudDocs/DSO 545/project/submission")
+
+library(tidyverse)
+library(rvest)
+library(Quandl)
+
+options(scipen = 999)
+theme_set(theme_bw())
+```
+Prep
+```{r, message=FALSE}
+bit_fp = as.data.frame(read_csv("BECI_TWh - TWh per Year.csv")) # bitcoin energy consumption
+bit_fp$Date = as.Date(bit_fp$Date)
+bit_tr = Quandl("BCHAIN/NTRAN") # bitcoin daily transaction
+## match the dates of enertgy consumption and transaction dataset
+tr_filtered = bit_tr %>%
+  filter(Date >= as.Date(min(bit_fp$Date)) & Date <= as.Date(max(bit_fp$Date)))
+
+btc = left_join(bit_fp, tr_filtered, by = "Date") %>%
+  rename(Est_TWh_per_Year = "Estimated TWh per Year",
+         Min_TWh_per_Year = "Minimum TWh per Year",
+         Num_Tr = "Value") %>%
+  # kwh per transaction
+  mutate(kWh_per_Tr = (Est_TWh_per_Year*1000000000/365)/Num_Tr) %>%
+  # co2(kg) emmision per transaction
+  # used weighted global average for carbon intensity (475 gCO2eq/kWh)
+  # ref: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2965436
+  mutate(co2_per_Tr = (Est_TWh_per_Year*1000000*475/365)/Num_Tr)
+
+## scrape data for major bitcoin miners worldwide
+url = "https://digiconomist.net/bitcoin-energy-consumption#assumptions"
+web = url %>% 
+  read_html() %>%
+  html_nodes(xpath = '//*[@id="tablepress-110"]') %>%
+  html_table() %>%
+  as.data.frame()
+
+web$Location[3] = "USA"
+
+web[8, ] = str_remove(web[8, ], "b>")
+location = web %>%
+  mutate(Power.consumption..megawatts. = as.numeric(Power.consumption..megawatts.),
+         X..of.surveyed.facilities = as.numeric(X..of.surveyed.facilities),
+         Carbon.intensity..gCO2eq.kWh. = as.numeric(Carbon.intensity..gCO2eq.kWh.))
+
+map = map_data("world")
+worldmap = left_join(map, head(location,7), by = c("region" = "Location"))
+worldmap[is.na(worldmap)] = 0
+```
+Visualization - Major Miners
+```{r}
+## visualize major miners in the world
+ggplot(worldmap, aes(long, lat, group = group, fill = Power.consumption..megawatts.))+
+  geom_polygon(color = "grey")+
+  scale_fill_gradient(low = "white", high = "red", name = "Power Consumption\n(megawatts)") +
+  theme_void()
+
+## visualize major miners carbon intensity (gCO2eq/kWh)
+location$Location = factor(location$Location,
+                           levels = c("China", "Georgia", "United States", "Canada",
+                                      "Sweden", "Iceland", "Estonia", "Total / Weighed Average "))
+location = mutate(location, highlight = ifelse(Location == "Total / Weighed Average ", T, F))
+ggplot(location, aes(Location, Carbon.intensity..gCO2eq.kWh.)) +
+  geom_bar(stat = "identity", aes(fill = highlight)) + # highlight the weighted avg.
+  scale_fill_manual(values = c("grey", "tomato")) +
+  theme(legend.position = "none") +
+  coord_flip() +
+  ylab("Carbon Intensity (gCO2eq/kWh)") +
+  xlab("Country") +
+  ggtitle("Carbon Intensity of Major Bitcoin Miner Countries")
+```
+Visualization - Energy Consumption
+```{r}
+# visualize energy consumption per 1 btc transaction vs.100k visa transaction
+# the spike during 2018-19 was caused by drop in transaction volume due to bearish speculations
+ggplot(btc, aes(Date, kWh_per_Tr)) +
+  geom_hline(yintercept = 148.63, color = "red", alpha = 0.9,
+             linetype = "dashed", size = 1) +
+  annotate(geom = "text", label = "100,000 Visa Transactions", color = "red",
+           x = max(bit_fp$Date)-220, y = 148.63, vjust = -0.5) +
+  geom_line(color = "darkblue", alpha = 0.7) +
+  ggtitle("Energy Consumption per Transaction") +
+  ylab("Energy Consumption in kWh") 
+```
+Visualization - Carbon Footprint
+```{r}
+# visualize carbon footprint per 1 btc transaction vs. per 100k visa transaction
+# using latest data point available when this research is conducted
+btc_co2 = last(btc, 1)$co2_per_Tr
+visa_co2 = 0.45/1000
+carbon = data_frame(name = c("Visa","100,000 Visa", "Bitcoin"),
+                    co2 = c(visa_co2, visa_co2*100000, btc_co2))
+carbon$name = factor(carbon$name, levels = c("Visa","100,000 Visa", "Bitcoin"))
+ggplot(carbon, aes(name, co2)) +
+  geom_bar(stat = "identity", fill = "darkorange", color = "darkorange") +
+  xlab("")+
+  ylab("CO2 Emissions in kg") +
+  ggtitle("Carbon Footprint of Bitcoin vs. Visa Transactions")
+
+```

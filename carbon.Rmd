@@ -1,0 +1,50 @@
+---
+output: pdf_document
+---
+
+```{r,message=FALSE}
+setwd("/Users/adazhong/Library/Mobile Documents/com~apple~CloudDocs/DSO 545/project/submission")
+
+library(data.table)
+library(fuzzyjoin)
+library(dplyr)
+library(ggplot2)
+```
+```{r,warning=FALSE}
+# read icecore data from NOAA
+df1 = fread("https://www.ncei.noaa.gov/pub/data/paleo/icecore/antarctica/epica_domec/edc3deuttemp2007.txt",
+            skip = "last 1000 years)")
+str(df1)
+df2 = fread("https://www.ncei.noaa.gov/pub/data/paleo/icecore/antarctica/epica_domec/edc-co2-2008.txt",
+            skip = "Timescale EDC3_gas_a") %>%
+  rename(Age = "Age(yrBP)", CO2 = "CO2(ppmv)")
+str(df2)
+
+appx = function(x, y) {
+  ifelse(abs(x-y) < 100, T, F)
+}
+
+# join co2 level and temperature by year
+df3 = fuzzy_inner_join(df1, df2, by = c("Age"),
+                       match_fun = list(`appx`))
+str(df3)
+
+# linear regression - co2(ppmv)~temperature
+lin = lm(df3$Temperature~df3$CO2)
+x = list(df3$CO2)
+pred = predict(lin, x)
+df3$Pred.Temperature = pred
+
+# visualize model accuracy
+# statistically significant correlation between co2 and temperature
+cols = c("Pred.Temperature" = "red", "Temperature" = "blue")
+ggplot(df3, aes(Age.x))+
+  geom_line(aes(y = Pred.Temperature, color = "Pred.Temperature"),alpha = 0.7) +
+  geom_line(aes(y = Temperature, color = "Temperature"), alpha = 0.7) +
+  scale_x_reverse() +
+  scale_color_manual(name = "", values = cols) +
+  ylab("Temperature in Celsius ") +
+  xlab("Number of Years Before Present") +
+  ggtitle("Assessing the Quality of Linear Reg. Model")
+
+```
